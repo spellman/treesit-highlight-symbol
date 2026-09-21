@@ -150,9 +150,10 @@ Returns nil if no suitable symbol at point or no tree-sitter parser."
             (treesit-highlight-symbol--clear-overlays)
             (treesit-highlight-symbol--place-overlays
              (treesit-highlight-symbol--regions-for-node node))))
-      (treesit-highlight-symbol--clear-overlays)
-      (setq treesit-highlight-symbol--last-text nil)
-      (setq treesit-highlight-symbol--last-start nil))))
+      (when treesit-highlight-symbol--last-text
+        (treesit-highlight-symbol--clear-overlays)
+        (setq treesit-highlight-symbol--last-text nil)
+        (setq treesit-highlight-symbol--last-start nil)))))
 
 (defun treesit-highlight-symbol--global-tick ()
   "Idle timer callback.  Highlight in the current buffer if the mode is active."
