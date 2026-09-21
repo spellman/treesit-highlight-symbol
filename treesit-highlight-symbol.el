@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'treesit)
+(require 'seq)
 
 ;;;; Customization
 
@@ -64,32 +65,58 @@ by the major mode."
 ;;;; Core algorithm
 
 (defun treesit-highlight-symbol--scope-predicate ()
-  "Return a predicate for scope boundary nodes.
-Prefers `treesit-defun-type-regexp' (set by tree-sitter major modes),
-falling back to `treesit-highlight-symbol-scope-types'."
-  (if treesit-defun-type-regexp
-      (if (consp treesit-defun-type-regexp)
-          (car treesit-defun-type-regexp)
-        treesit-defun-type-regexp)
-    (lambda (n)
-      (member (treesit-node-type n)
-              treesit-highlight-symbol-scope-types))))
+  "Return a predicate matching scope boundary nodes.
+Tests a node's type against `treesit-highlight-symbol-scope-types'.
+
+`treesit-defun-type-regexp' is deliberately NOT consulted: major modes set
+it for navigation, not lexical scoping, and some (notably `clojure-ts-mode')
+make it match every sexp.  Treating that as a scope boundary collapses scope
+to the innermost enclosing form, so only the symbol under point would be
+highlighted.  When no ancestor matches `treesit-highlight-symbol-scope-types',
+`treesit-highlight-symbol--find-scope' falls back to the buffer root node,
+i.e. whole-file scope."
+  (lambda (n)
+    (member (treesit-node-type n)
+            treesit-highlight-symbol-scope-types)))
+
+(defun treesit-highlight-symbol--name-of-scope-p (node scope)
+  "Return non-nil if NODE lies within the name child of SCOPE.
+A function name lives inside its function_definition node structurally,
+but is visible in the enclosing scope, not the function's own scope."
+  (when-let* ((name-node (treesit-node-child-by-field-name scope "name")))
+    (and (<= (treesit-node-start name-node) (treesit-node-start node))
+         (>= (treesit-node-end name-node) (treesit-node-end node)))))
 
 (defun treesit-highlight-symbol--find-scope (node)
-  "Return the nearest scope ancestor of NODE, or the buffer root node."
-  (let ((pred (treesit-highlight-symbol--scope-predicate)))
-    (or (treesit-parent-until node pred)
+  "Return the nearest scope ancestor of NODE, or the buffer root node.
+When NODE is the name child of a scope boundary (e.g. a function name
+inside its function_definition), skip that scope and use the enclosing
+one, because the name is visible in the enclosing scope."
+  (let* ((pred (treesit-highlight-symbol--scope-predicate))
+         (scope (treesit-parent-until node pred)))
+    (when (and scope
+               (treesit-highlight-symbol--name-of-scope-p node scope))
+      (setq scope (treesit-parent-until scope pred)))
+    (or scope
         (treesit-buffer-root-node (treesit-node-language node)))))
 
 (defun treesit-highlight-symbol--collect-matches (scope-node target-type target-text file-scope-p)
   "Find all nodes in SCOPE-NODE matching TARGET-TYPE and TARGET-TEXT.
 When FILE-SCOPE-P is non-nil, restrict matches to the visible window.
-Uses `treesit-query-capture' so tree-sitter does the matching in C."
-  (let* ((pattern `(((,(intern target-type)) @match
-                     (:match ,(concat "\\`" (regexp-quote target-text) "\\'") @match))))
+
+Tree-sitter does the structural matching in C: the query captures every
+node of TARGET-TYPE.  Text matching is then done in Lisp by comparing each
+node's text to TARGET-TEXT.  The text comparison is not folded into the
+query because Emacs' list-form query predicates (`:match', `:equal') fail
+with \"Cannot find captured node\" when the predicate refers to its own
+capture, across every grouping arrangement."
+  (let* ((pattern `((,(intern target-type)) @match))
          (beg (when file-scope-p (window-start)))
-         (end (when file-scope-p (window-end nil t))))
-    (treesit-query-capture scope-node pattern beg end t)))
+         (end (when file-scope-p (window-end nil t)))
+         (nodes (treesit-query-capture scope-node pattern beg end t)))
+    (seq-filter (lambda (node)
+                  (equal (treesit-node-text node t) target-text))
+                nodes)))
 
 (defun treesit-highlight-symbol--regions-for-node (node)
   "Return (START . END) pairs for all occurrences matching NODE."
