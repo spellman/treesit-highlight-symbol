@@ -86,6 +86,20 @@ Uses `treesit-query-capture' so tree-sitter does the matching in C."
          (end (when file-scope-p (window-end nil t))))
     (treesit-query-capture scope-node pattern beg end t)))
 
+(defun treesit-highlight-symbol--regions-for-node (node)
+  "Return (START . END) pairs for all occurrences matching NODE."
+  (let* ((target-text (treesit-node-text node t))
+         (target-type (treesit-node-type node))
+         (scope (treesit-highlight-symbol--find-scope node))
+         (root (treesit-buffer-root-node (treesit-node-language node)))
+         ;; treesit-node-eq compares the underlying C objects, so two
+         ;; separately obtained root-node wrappers compare equal.
+         (file-scope-p (treesit-node-eq scope root))
+         (matches (treesit-highlight-symbol--collect-matches
+                   scope target-type target-text file-scope-p)))
+    (mapcar (lambda (n) (cons (treesit-node-start n) (treesit-node-end n)))
+            matches)))
+
 (defun treesit-highlight-symbol-regions ()
   "Return (START . END) pairs for all matching occurrences of symbol at point.
 Returns nil if no suitable symbol at point or no tree-sitter parser."
@@ -95,16 +109,7 @@ Returns nil if no suitable symbol at point or no tree-sitter parser."
                  (treesit-node-check node 'named)
                  (not (member (treesit-node-type node)
                               treesit-highlight-symbol-ignored-node-types)))
-        (let* ((target-text (treesit-node-text node t))
-               (target-type (treesit-node-type node))
-               (scope (treesit-highlight-symbol--find-scope node))
-               (root (treesit-buffer-root-node (treesit-node-language node)))
-               (file-scope-p (treesit-node-eq scope root))
-               (matches (treesit-highlight-symbol--collect-matches
-                         scope target-type target-text file-scope-p)))
-          (mapcar (lambda (n)
-                    (cons (treesit-node-start n) (treesit-node-end n)))
-                  matches))))))
+        (treesit-highlight-symbol--regions-for-node node)))))
 
 ;;;; Overlay management
 
@@ -139,7 +144,7 @@ Returns nil if no suitable symbol at point or no tree-sitter parser."
             (setq treesit-highlight-symbol--last-start start)
             (treesit-highlight-symbol--clear-overlays)
             (treesit-highlight-symbol--place-overlays
-             (treesit-highlight-symbol-regions))))
+             (treesit-highlight-symbol--regions-for-node node))))
       (treesit-highlight-symbol--clear-overlays)
       (setq treesit-highlight-symbol--last-text nil)
       (setq treesit-highlight-symbol--last-start nil))))
