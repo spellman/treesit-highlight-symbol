@@ -52,7 +52,12 @@ by the major mode."
 
 ;;;; Internal state
 
-(defvar-local treesit-highlight-symbol--timer nil)
+(defvar treesit-highlight-symbol--global-timer nil
+  "Single idle timer shared by all buffers.")
+
+(defvar treesit-highlight-symbol--buffers nil
+  "Buffers with `treesit-highlight-symbol-mode' enabled.")
+
 (defvar-local treesit-highlight-symbol--last-text nil)
 (defvar-local treesit-highlight-symbol--last-start nil)
 
@@ -149,16 +154,35 @@ Returns nil if no suitable symbol at point or no tree-sitter parser."
       (setq treesit-highlight-symbol--last-text nil)
       (setq treesit-highlight-symbol--last-start nil))))
 
-(defun treesit-highlight-symbol--tick (buf)
-  "Idle timer callback.  Highlight in BUF if it is live and visible."
-  (when (and (buffer-live-p buf)
-             (get-buffer-window buf))
-    (with-current-buffer buf
-      (treesit-highlight-symbol--highlight))))
+(defun treesit-highlight-symbol--global-tick ()
+  "Idle timer callback.  Highlight in the current buffer if the mode is active."
+  (when treesit-highlight-symbol-mode
+    (treesit-highlight-symbol--highlight)))
 
 (defun treesit-highlight-symbol--on-scroll (_window _start)
   "Invalidate cache after scrolling so the next idle tick re-computes."
   (setq treesit-highlight-symbol--last-text nil))
+
+(defun treesit-highlight-symbol--on-buffer-kill ()
+  "Clean up when a buffer with the mode enabled is killed."
+  (setq treesit-highlight-symbol--buffers
+        (delq (current-buffer) treesit-highlight-symbol--buffers))
+  (treesit-highlight-symbol--maybe-cancel-timer))
+
+(defun treesit-highlight-symbol--ensure-timer ()
+  "Start the global idle timer if not already running."
+  (unless treesit-highlight-symbol--global-timer
+    (setq treesit-highlight-symbol--global-timer
+          (run-with-idle-timer
+           treesit-highlight-symbol-idle-delay t
+           #'treesit-highlight-symbol--global-tick))))
+
+(defun treesit-highlight-symbol--maybe-cancel-timer ()
+  "Cancel the global idle timer if no buffers use the mode."
+  (when (and treesit-highlight-symbol--global-timer
+             (null treesit-highlight-symbol--buffers))
+    (cancel-timer treesit-highlight-symbol--global-timer)
+    (setq treesit-highlight-symbol--global-timer nil)))
 
 ;;;; Minor mode
 
@@ -171,18 +195,21 @@ Returns nil if no suitable symbol at point or no tree-sitter parser."
       (progn
         (setq treesit-highlight-symbol--last-text nil)
         (setq treesit-highlight-symbol--last-start nil)
-        (setq treesit-highlight-symbol--timer
-              (run-with-idle-timer
-               treesit-highlight-symbol-idle-delay t
-               #'treesit-highlight-symbol--tick (current-buffer)))
+        (unless (memq (current-buffer) treesit-highlight-symbol--buffers)
+          (push (current-buffer) treesit-highlight-symbol--buffers))
+        (treesit-highlight-symbol--ensure-timer)
+        (add-hook 'kill-buffer-hook
+                  #'treesit-highlight-symbol--on-buffer-kill nil t)
         (add-hook 'window-scroll-functions
                   #'treesit-highlight-symbol--on-scroll nil t))
-    (when treesit-highlight-symbol--timer
-      (cancel-timer treesit-highlight-symbol--timer)
-      (setq treesit-highlight-symbol--timer nil))
+    (setq treesit-highlight-symbol--buffers
+          (delq (current-buffer) treesit-highlight-symbol--buffers))
+    (treesit-highlight-symbol--maybe-cancel-timer)
     (treesit-highlight-symbol--clear-overlays)
     (setq treesit-highlight-symbol--last-text nil)
     (setq treesit-highlight-symbol--last-start nil)
+    (remove-hook 'kill-buffer-hook
+                 #'treesit-highlight-symbol--on-buffer-kill t)
     (remove-hook 'window-scroll-functions
                  #'treesit-highlight-symbol--on-scroll t)))
 
