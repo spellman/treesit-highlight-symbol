@@ -76,33 +76,15 @@ falling back to `treesit-highlight-symbol-scope-types'."
     (or (treesit-parent-until node pred)
         (treesit-buffer-root-node (treesit-node-language node)))))
 
-(defun treesit-highlight-symbol--flatten-sparse-tree (tree)
-  "Extract all matched nodes from a sparse TREE.
-TREE is the structure returned by `treesit-induce-sparse-tree'."
-  (let ((result nil))
-    (when (car tree)
-      (push (car tree) result))
-    (dolist (child (cdr tree))
-      (setq result (nconc (treesit-highlight-symbol--flatten-sparse-tree child)
-                          result)))
-    (nreverse result)))
-
 (defun treesit-highlight-symbol--collect-matches (scope-node target-type target-text file-scope-p)
   "Find all nodes in SCOPE-NODE matching TARGET-TYPE and TARGET-TEXT.
-When FILE-SCOPE-P is non-nil, restrict matches to the visible window."
-  (let ((win-start (when file-scope-p (window-start)))
-        (win-end (when file-scope-p (window-end nil t))))
-    (let ((sparse-tree
-           (treesit-induce-sparse-tree
-            scope-node
-            (lambda (n)
-              (and (string= (treesit-node-type n) target-type)
-                   (string= (treesit-node-text n t) target-text)
-                   (or (not file-scope-p)
-                       (let ((ns (treesit-node-start n)))
-                         (and (>= ns win-start) (<= ns win-end)))))))))
-      (when sparse-tree
-        (treesit-highlight-symbol--flatten-sparse-tree sparse-tree)))))
+When FILE-SCOPE-P is non-nil, restrict matches to the visible window.
+Uses `treesit-query-capture' so tree-sitter does the matching in C."
+  (let* ((pattern `(((,(intern target-type)) @match
+                     (:match ,(concat "\\`" (regexp-quote target-text) "\\'") @match))))
+         (beg (when file-scope-p (window-start)))
+         (end (when file-scope-p (window-end nil t))))
+    (treesit-query-capture scope-node pattern beg end t)))
 
 (defun treesit-highlight-symbol-regions ()
   "Return (START . END) pairs for all matching occurrences of symbol at point.
